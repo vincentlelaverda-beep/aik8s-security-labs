@@ -1,0 +1,19 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: security-lab
+
+nodes:
+  # Control-plane node — exposes ports for future ingress labs (Lab 08+)
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP
+
+  # Two workers — enables node-level isolation experiments in later labs
+  - role: worker
+
+  - role: worker

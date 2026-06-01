@@ -1,0 +1,14 @@
+# Test pod for triggering Falco alerts
+# Runs as root (default) so write-to-/etc alerts fire cleanly
+# ubuntu image has bash, cat, touch — all needed for the demo triggers
+apiVersion: v1
+kind: Pod
+metadata:
+  name: falco-test
+  namespace: default
+spec:
+  containers:
+    - name: falco-test
+      image: ubuntu:22.04
+      command: ["sleep", "3600"]
+  restartPolicy: Never

@@ -1,0 +1,10 @@
+# Falco Helm values for KIND on WSL2
+# Uses modern_ebpf driver — no kernel module compilation needed
+# Works with WSL2 kernel 5.15+ without any extra setup
+driver:
+  kind: modern_ebpf
+
+# Keep output readable in kubectl logs
+tty: true
+
+# Stdout output enabled by default — kubectl logs falco pod works out of the box

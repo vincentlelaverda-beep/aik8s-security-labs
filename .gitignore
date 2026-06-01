@@ -1,0 +1,9 @@
+writeup.md
+CLAUDE.md
+PROGRESS.md
+kube-bench-results.txt
+resume2.0.md
+*.pdf
+.claude/
+*.tfstate
+*.tfvars
