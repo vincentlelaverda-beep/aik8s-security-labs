@@ -23,7 +23,8 @@ This is the difference between static and runtime security:
 | **What it catches** | Misconfigurations | Attacks in progress |
 | **Can it be bypassed?** | By changing config | Very hard — operates below the container |
 
-Falco sits below the container runtime. Even if an attacker fully controls a container, the syscalls it makes are still visible to Falco at the kernel level.
+Falco sits below the container runtime. Even if an attacker fully controls a container, the sysca
+lls it makes are still visible to Falco at the kernel level.
 
 In a corporate cloud environment, Falco is the equivalent of an EDR agent on each K8S node — it is the runtime detection layer of the CWPP (Cloud Workload Protection Platform).
 
@@ -62,7 +63,7 @@ Falco rules are YAML-based conditions. A rule looks like:
   priority: NOTICE
 ```
 
-Falco ships with ~100 default rules covering the most common attack patterns.
+Falco ships with a default ruleset covering the most common high-confidence attack patterns. As of `falco-rules:5` (Falco 0.38+), this is a curated set of ~26 rules. A broader `falco-incubating-rules` package is available for teams that want wider coverage at the cost of more noise.
 
 ---
 
@@ -141,14 +142,17 @@ Now switch to **Terminal 2** and run each trigger one at a time, watching Termin
 ### Trigger 1 — Spawn a shell in a container
 
 ```bash
-kubectl exec falco-test -- bash -c "echo hello"
+kubectl exec -it falco-test -- bash
+# once inside, type: exit
 ```
+
+> **Important**: the `-it` flag is required. It allocates a pseudo-TTY, setting `proc.tty != 0`. The Falco rule condition includes `proc.tty != 0` specifically to filter out non-interactive shell use (CI scripts, init commands, etc.) — so `bash -c "echo hello"` without `-it` will NOT fire the rule.
 
 **Expected Falco alert:**
 ```
 Notice A shell was spawned in a container under unusual circumstances
 (user=root user_loginuid=-1 k8s.ns=default k8s.pod=falco-test 
-container=falco-test shell=bash parent=runc cmdline=bash -c "echo hello" ...)
+container=falco-test shell=bash parent=runc cmdline=bash ...)
 ```
 
 **Why this fires**: legitimate application containers should never have a shell spawned in them at runtime. If you see this in production, it means either an operator is debugging (expected, but should be audited) or an attacker has shell access inside your pod.
@@ -187,6 +191,8 @@ k8s.pod=falco-test container=falco-test ...)
 
 **Why this fires**: application containers should have read-only root filesystems. Writing to `/etc` at runtime is a persistence technique — attackers modify config files to survive container restarts or to inject malicious configuration.
 
+> **If no alert fires**: the "Write below etc" rule was removed from `falco-rules:5` (Falco 0.38+). The fix is in `falco-values.yaml` — see the [Troubleshooting](#troubleshooting) section below for the full explanation.
+
 ---
 
 ## Understanding alert priority levels
@@ -223,22 +229,93 @@ The cluster stays up for Lab 04.
 
 ---
 
+## Troubleshooting
+
+Two issues surfaced during this lab that are worth documenting because they reveal something real about how Falco works.
+
+---
+
+### Issue 1 — Trigger 1 silently produced no alert
+
+**Symptom**: running `kubectl exec falco-test -- bash -c "echo hello"` produced no Falco alert, even though Falco was healthy and the other triggers worked.
+
+**Root cause**: the "Terminal shell in container" rule has the condition `proc.tty != 0`. A TTY is a pseudo-terminal device — it is present when a human opens an interactive session, and absent when a script runs a command non-interactively. `bash -c "echo hello"` runs and exits in milliseconds with no TTY attached (`proc.tty = 0`), so the condition evaluates false and no alert fires.
+
+This is intentional design. If the rule fired on every non-interactive bash invocation, CI pipelines, container init scripts, and health checks would generate constant noise. Falco is specifically watching for a human-style interactive shell — the kind an attacker uses after gaining initial access to a container.
+
+**Fix**: use `-it` to allocate a pseudo-TTY:
+
+```bash
+kubectl exec -it falco-test -- bash
+# type: exit
+```
+
+**Security takeaway**: Falco rules are not "bash ran" — they are "an interactive terminal was attached to a container." This distinction matters when you are tuning rules for production. A rule that fires too broadly gets disabled by ops teams. A rule that fires on the right signal gets acted on.
+
+---
+
+### Issue 2 — Trigger 3 (write to /etc) produced no alert
+
+**Symptom**: `kubectl exec falco-test -- touch /etc/evil-file` created the file successfully but Falco produced no alert.
+
+**Debugging steps**:
+
+1. Confirmed the write actually happened — the file existed, so this was not a permissions issue:
+   ```bash
+   kubectl exec falco-test -- ls /etc/evil-file
+   # /etc/evil-file  ← file is there, write succeeded
+   ```
+
+2. Checked which rules Falco loaded — only 26 rules, far fewer than expected:
+   ```bash
+   kubectl exec -n falco <falco-pod> -- grep '^- rule:' /etc/falco/falco_rules.yaml
+   # 26 rules listed — "Write below etc" not among them
+   ```
+
+3. Investigated the rules delivery architecture. In Falco 0.44.0, the Helm chart uses two sidecar containers:
+   - `falcoctl-artifact-install` (init container): downloads the rules OCI artifact from `ghcr.io/falcosecurity/rules/falco-rules:5` at startup
+   - `falcoctl-artifact-follow` (sidecar): keeps them updated
+
+   The downloaded rules land in an `emptyDir` volume shared between the sidecars and the main Falco container. Checking the init container logs confirmed the download succeeded and the signature was verified.
+
+4. Listed all 26 loaded rules and confirmed "Write below etc" was absent. The rule existed in older Falco versions but was removed from `falco-rules:5` — it was considered too noisy in environments where package managers legitimately write to `/etc` during container build or init.
+
+**Fix**: add the rule back as a custom rule in `falco-values.yaml` using the `customRules` stanza, then upgrade the Helm release:
+
+```bash
+helm upgrade falco falcosecurity/falco \
+  --namespace falco \
+  --values falco-values.yaml
+```
+
+The custom rule is already in `falco-values.yaml` in this repo. See the `customRules.write_etc_rule.yaml` block.
+
+**Security takeaway**: the default Falco ruleset is intentionally conservative — it ships rules that are high-confidence and low-noise across diverse environments. Security teams are expected to extend it with custom rules tuned to their threat model. In a production environment you would also load the Falco "incubating" rules package (`falco-incubating-rules`) which contains a broader set of detections that are useful but noisier. Knowing that a rule you expected is not loaded is exactly the kind of gap that shows up during a detection coverage review.
+
+---
+
 ## What I found / What this means
 
-Three manual triggers, three Falco alerts. Each alert includes:
+Three manual triggers, three Falco alerts after working through two real issues. Each alert includes:
 - Which rule fired and its priority
 - The exact process that triggered it
 - The K8S pod and namespace context
 - The user and command
 
-This is the runtime detection layer that Kube-Bench cannot provide. Kube-Bench told us in Lab 02 that there are no NetworkPolicies and no Pod Security policies. Falco catches what happens when those gaps are exploited — a shell being spawned, a sensitive file being read, a persistence attempt via /etc writes.
+**Finding 1 — Rule conditions encode threat model decisions, not just detection logic.**
+The `proc.tty != 0` condition on the shell rule is not a technicality — it is a deliberate choice to alert on attacker-style interactive access and ignore legitimate automation. Understanding that condition is the difference between blindly following a runbook and actually knowing what your detection covers.
+
+**Finding 2 — The default ruleset is a starting point, not a complete coverage set.**
+`falco-rules:5` ships 26 rules. The "Write below etc" rule — which catches a textbook persistence technique — was removed because it generates too much noise in generic environments. In a real deployment you would audit which rules you need, load the `falco-incubating-rules` package, and write custom rules for your workload's specific normal behaviour. A detection you assume exists but doesn't is a blind spot.
+
+**The bigger picture**: this is the runtime detection layer that Kube-Bench cannot provide. Kube-Bench told us in Lab 02 that there are no NetworkPolicies and no Pod Security policies. Falco catches what happens when those gaps are exploited — a shell being spawned, a sensitive file being read, a persistence attempt via /etc writes.
 
 For an AI workload, Falco is particularly valuable because:
 - AI inference pods (Ollama) should never spawn a shell
 - Model storage should never have files written at runtime
 - Vector DB pods should only make network connections to the inference pod
 
-Any deviation from those expectations is a Falco alert. Lab 09 (AI stack on K8S) will show what normal baseline behavior looks like — and therefore what an attack looks like against it.
+Any deviation from those expectations is a Falco alert. Lab 09 (AI stack on K8S) will show what normal baseline behaviour looks like — and therefore what an attack looks like against it.
 
 ---
 

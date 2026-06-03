@@ -8,3 +8,23 @@ driver:
 tty: true
 
 # Stdout output enabled by default — kubectl logs falco pod works out of the box
+
+# "Write below etc" was removed from falco-rules:5 (Falco 0.38+) — add it back as a custom rule.
+# This covers Trigger 3 of the lab (persistence via /etc file write).
+customRules:
+  write_etc_rule.yaml: |
+    - macro: write_etc_common
+      condition: >
+        evt.type in (open,openat,openat2) and evt.is_open_write=true
+        and fd.typechar='f' and fd.num>=0
+        and fd.name startswith /etc
+    - rule: Write below etc
+      desc: An attempt to write to any file below /etc
+      condition: write_etc_common and container
+      output: >
+        File below /etc opened for writing
+        (user=%user.name command=%proc.cmdline file=%fd.name
+        k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name
+        container=%container.name image=%container.image.repository)
+      priority: ERROR
+      tags: [filesystem, mitre_persistence, T1222]
