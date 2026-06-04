@@ -1,0 +1,14 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: good-pod-deny-all
+  namespace: lab-04
+spec:
+  podSelector:
+    matchLabels:
+      app: good-pod
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
