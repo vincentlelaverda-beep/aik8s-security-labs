@@ -1,0 +1,13 @@
+# Grype configuration — sets the pipeline gate threshold
+# A scan fails (exit code 1) if any finding meets or exceeds this severity.
+# Options: negligible, low, medium, high, critical
+fail-on-severity: high
+
+# Only report findings at or above this severity in table output.
+# Set to "negligible" to see everything; "high" to reduce noise.
+output:
+  - table
+
+# Show only fixable CVEs (those with a known patched version).
+# Useful for prioritising what to actually fix vs accept as risk.
+# only-fixed: true
