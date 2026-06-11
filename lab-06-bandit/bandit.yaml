@@ -1,0 +1,14 @@
+# Bandit configuration for Lab 06
+# Use with: bandit -c bandit.yaml vulnerable_training.py
+
+# No tests skipped — show all findings including LOW severity
+skips: []
+
+# Run all plugins (empty list = all)
+tests: []
+
+# Exclude the hardened version and any test files from the default scan
+exclude_dirs:
+  - tests
+  - .venv
+  - __pycache__
